@@ -10,24 +10,15 @@ import numpy as np
 from typing import List, Tuple
 import logging
 from fastai.vision.all import *
-import sys
-import pathlib
 import torch
 import time
-from PIL import Image
 from collections import Counter
 
-
-if sys.platform == "win32":
-    class PosixPath(pathlib.WindowsPath):
-        def __new__(cls, *args, **kwargs):
-            return pathlib.WindowsPath(*args, **kwargs)
-    pathlib.PosixPath = PosixPath
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cpu')
 logger.info(f"Using device: {device}")
 
 pose_library = {
@@ -357,3 +348,4 @@ async def get_voice_guidance(level: str, goal: str, duration: int):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
