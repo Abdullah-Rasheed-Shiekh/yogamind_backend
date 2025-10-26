@@ -1,6 +1,5 @@
 import io
 import random
-import pyttsx3
 import json
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -322,30 +321,8 @@ async def detect_pose_video(file: UploadFile = File(...)):
         "description": pose_library.get(most_common_pose, {}).get("description", "Unknown pose")
     })
 
-
-@app.post("/voice_guidance")
-async def get_voice_guidance(level: str, goal: str, duration: int):
-    routine = generate_routine(level, goal, duration)
-    if not routine:
-        raise HTTPException(status_code=404, detail="No routine generated")
-    
-    engine = pyttsx3.init()
-    engine.setProperty('rate', 150)
-    engine.setProperty('volume', 0.9)
-    aggregated = aggregate_routine(routine)
-    
-    audio_buffer = io.BytesIO()
-    for i, (pose, t) in enumerate(aggregated, 1):
-        mins = t // 60
-        secs = t % 60
-        time_str = f"{mins} minute{'s' if mins != 1 else ''}" if secs == 0 else f"{mins} minute{'s' if mins != 1 else ''} and {secs} seconds"
-        engine.say(f"Step {i}. {pose} for {time_str}. {pose_library[pose]['description']}")
-    engine.save_to_file("", audio_buffer)
-    engine.runAndWait()
-    audio_buffer.seek(0)
-    return JSONResponse(content={"message": "Voice guidance generated - integrate audio streaming if needed"})
-
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
 
