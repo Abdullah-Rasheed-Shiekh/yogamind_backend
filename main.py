@@ -1,101 +1,100 @@
 import io
-import random
 import json
+import time
+import random
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from typing import List, Tuple
+from collections import Counter
+import torch
+from torchvision import transforms
+from PIL import Image
 import cv2
 import numpy as np
-from typing import List, Tuple
 import logging
-from fastai.vision.all import *
-import torch
-import time
-from collections import Counter
 
-
+# Logging setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-device = torch.device('cpu')
+# Device setup
+device = torch.device("cpu")
 logger.info(f"Using device: {device}")
 
+# Pose metadata
 pose_library = {
     "DownDog": {
         "level": "Beginner",
-        "focus": ["Flexibility", "Strength","Relaxation"],
+        "focus": ["Flexibility", "Strength", "Relaxation"],
         "time": 120,
         "type": "warm-up",
         "description": "Hands and feet on the ground, hips raised, forming an inverted V shape.",
-        "image": "yogamind\backend\images\DownDog.jpg"
+        "image": "yogamind/backend/images/DownDog.jpg"
     },
     "Warrior2": {
         "level": "Intermediate",
-        "focus": ["Strength", "Flexibility","Relaxation"],
+        "focus": ["Strength", "Flexibility", "Relaxation"],
         "time": 90,
         "type": "warm-up",
         "description": "Legs in a lunge, arms extended parallel to the ground, gazing over front hand.",
-        "image": "yogamind\backend\images\Warrior2.jpg"
+        "image": "yogamind/backend/images/Warrior2.jpg"
     },
     "Lotus": {
         "level": "Advanced",
-        "focus": ["Flexibility", "Relaxation","Strength"],
+        "focus": ["Flexibility", "Relaxation", "Strength"],
         "time": 120,
         "type": "cool-down",
         "description": "Seated with legs crossed, each foot on opposite thigh, hands resting on knees.",
-        "image": "yogamind\backend\images\Lotus.jpg"
+        "image": "yogamind/backend/images/Lotus.jpg"
     },
     "Plank": {
         "level": "Beginner",
-        "focus": ["Strength","Relaxation"],
+        "focus": ["Strength", "Relaxation"],
         "time": 60,
         "type": "main",
         "description": "Body straight, supported on forearms and toes, core engaged.",
-        "image": "yogamind\backend\images\Plank.jpg"
-    },
-    "Staff": {
-        "level": "Intermediate",
-        "focus": ["Flexibility"],
-        "time": 90,
-        "type": "main",
-        "description": "Seated with legs extended forward, back straight, hands by hips.",
-        "image": "yogamind\backend\images\Staff.jpg"
-    },
-    "Diamond": {
-        "level": "Beginner",
-        "focus": ["Stength","Relaxation"],
-        "time": 120,
-        "type": "cool-down",
-        "description": "Seated with soles of feet together, knees bent outward, hands holding feet.",
-        "image": "yogamind\backend\images\Diamond.jpg"
+        "image": "yogamind/backend/images/Plank.jpg"
     },
     "Tree": {
         "level": "Intermediate",
-        "focus": ["Flexibility","Relaxation","Strength"],
+        "focus": ["Flexibility", "Relaxation", "Strength"],
         "time": 60,
         "type": "main",
         "description": "Standing on one leg, other foot placed on inner thigh, hands in prayer position.",
-        "image": "yogamind\backend\images\Tree.jpg"
+        "image": "yogamind/backend/images/Tree.jpg"
     },
-    "Goddess": {
-        "level": "Intermediate",
-        "focus": ["Strength", "Flexibility"],
-        "time": 90,
-        "type": "main",
-        "description": "Wide stance, knees bent, arms bent at elbows, palms up.",
-        "image": "yogamind\backend\images\Goddess.jpg"
-    },
-    "Staff": {
-        "level": "Advanced",
-        "focus": ["Flexibility","Strength"],
-        "time": 90,
-        "type": "main",
-        "description": "Seated with legs extended forward, back straight, hands by hips.",
-        "image": "yogamind\backend\images\Staff.jpg"
-        }
 }
 
+# Load TorchScript model
+try:
+    yoga_model = torch.jit.load("yoga_model_scripted.pt", map_location=device)
+    yoga_model.eval()
+    logger.info("✅ TorchScript model loaded successfully")
+except Exception as e:
+    logger.error(f"Failed to load model: {e}")
+    yoga_model = None
 
+# Image preprocessing
+transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+])
+
+# FastAPI app setup
+app = FastAPI(title="Yoga Pose Detection API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# Utility functions
 def generate_routine(level: str, goal: str, duration: int) -> List[Tuple[str, int]]:
     total_seconds = duration * 60
     goal_map = {
@@ -106,81 +105,26 @@ def generate_routine(level: str, goal: str, duration: int) -> List[Tuple[str, in
     all_poses = {p: v for p, v in pose_library.items() if v["level"] == level and focus in v["focus"]}
     if not all_poses:
         return []
-    warm_up_poses = {p: v for p, v in all_poses.items() if v["type"] == "warm-up"}
-    main_poses = {p: v for p, v in all_poses.items() if v["type"] == "main"}
-    cool_down_poses = {p: v for p, v in all_poses.items() if v["type"] == "cool-down"}
-    routine = []
-    current_time = 0
-    if warm_up_poses:
-        pose = random.choice(list(warm_up_poses.keys()))
-        time = warm_up_poses[pose]["time"]
-        if current_time + time <= total_seconds:
-            routine.append((pose, time))
-            current_time += time
-    while main_poses and current_time < total_seconds * 0.8:
-        pose = random.choice(list(main_poses.keys()))
-        time = main_poses[pose]["time"]
-        if current_time + time > total_seconds:
-            continue
-        routine.append((pose, time))
-        current_time += time
-    if cool_down_poses:
-        pose = random.choice(list(cool_down_poses.keys()))
-        time = cool_down_poses[pose]["time"]
-        if current_time + time <= total_seconds:
-            routine.append((pose, time))
-            current_time += time
-    while current_time < total_seconds and main_poses:
-        pose = random.choice(list(main_poses.keys()))
-        time = main_poses[pose]["time"]
-        if current_time + time > total_seconds:
-            continue
-        routine.append((pose, time))
-        current_time += time
+    routine, current_time = [], 0
+    while current_time < total_seconds:
+        pose = random.choice(list(all_poses.keys()))
+        time_spent = all_poses[pose]["time"]
+        if current_time + time_spent > total_seconds:
+            break
+        routine.append((pose, time_spent))
+        current_time += time_spent
     return routine
-
-def aggregate_routine(routine: List[Tuple[str, int]]) -> List[Tuple[str, int]]:
-    pose_times = {}
-    for pose, time in routine:
-        pose_times[pose] = pose_times.get(pose, 0) + time
-    return [(pose, time) for pose, time in pose_times.items()]
-
-yoga_model = None
-try:
-    yoga_model = load_learner("yoga_model_windows.pkl")
-    yoga_model.model.to(device)
-    yoga_model.model.eval()
-    logger.info("FastAI model loaded successfully")
-except Exception as e:
-    logger.error(f"Failed to load FastAI model: {e}")
-    yoga_model = None
-
-app = FastAPI(title="Yoga Pose Detection and Routine API")
-
-# Enable CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 
 @app.post("/generate_routine")
 async def generate_yoga_routine(level: str, goal: str, duration: int):
-    if level not in ["Beginner", "Intermediate", "Advanced"]:
-        raise HTTPException(status_code=400, detail="Invalid level")
-    if goal not in ["Relaxation", "Flexibility", "Strength", "Weight Loss", "Back Pain Relief"]:
-        raise HTTPException(status_code=400, detail="Invalid goal")
-    if duration not in [10, 20, 30]:
-        raise HTTPException(status_code=400, detail="Invalid duration")
-    
+    if not level or not goal or not duration:
+        raise HTTPException(status_code=400, detail="Missing required parameters")
+
     routine = generate_routine(level, goal, duration)
     if not routine:
-        raise HTTPException(status_code=404, detail="No poses found for your criteria")
-    
-    aggregated = aggregate_routine(routine)
+        raise HTTPException(status_code=404, detail="No suitable poses found")
+
     response = {
         "routine": [
             {
@@ -188,7 +132,7 @@ async def generate_yoga_routine(level: str, goal: str, duration: int):
                 "time_seconds": time,
                 "description": pose_library[pose]["description"],
                 "image": pose_library[pose]["image"]
-            } for pose, time in aggregated
+            } for pose, time in routine
         ]
     }
     return JSONResponse(content=response)
@@ -198,131 +142,33 @@ async def generate_yoga_routine(level: str, goal: str, duration: int):
 async def detect_pose_image(file: UploadFile = File(...)):
     if not yoga_model:
         raise HTTPException(status_code=500, detail="Model not loaded")
-    
+
     contents = await file.read()
-    img = PILImage.create(io.BytesIO(contents))
-    
-    start_time = time.time()
     try:
-        test_dl = yoga_model.dls.test_dl([img])
+        image = Image.open(io.BytesIO(contents)).convert("RGB")
+        input_tensor = transform(image).unsqueeze(0).to(device)
+
         with torch.no_grad():
-            preds = yoga_model.get_preds(dl=test_dl, reorder=False)
-            pred_idx = preds[0].argmax(dim=1).item()
-            probs = torch.softmax(preds[0], dim=1)
+            output = yoga_model(input_tensor)
+            probs = torch.softmax(output, dim=1)
+            pred_idx = probs.argmax(dim=1).item()
             confidence = probs[0][pred_idx].item()
-            pred = yoga_model.dls.vocab[pred_idx]
-        logger.info(f"Image prediction time: {time.time() - start_time:.2f}s")
+
+        # If your class labels are known:
+        classes = list(pose_library.keys())
+        pose_name = classes[pred_idx % len(classes)]
+
         return {
-            "pose": pred,
+            "pose": pose_name,
             "confidence": confidence,
-            "description": pose_library.get(pred, {}).get("description", "Unknown pose")
+            "description": pose_library.get(pose_name, {}).get("description", "Unknown pose")
         }
+
     except Exception as e:
         logger.error(f"Image prediction failed: {e}")
         raise HTTPException(status_code=500, detail="Image prediction failed")
 
-@app.post("/detect_pose_video")
-async def detect_pose_video(file: UploadFile = File(...)):
-    if not yoga_model:
-        raise HTTPException(status_code=500, detail="Model not loaded")
-    
-    contents = await file.read()
-    temp_path = "temp_video.mp4"
-    with open(temp_path, "wb") as f:
-        f.write(contents)
-    
-    start_time = time.time()
-    cap = cv2.VideoCapture(temp_path)
-    if not cap.isOpened():
-        logger.error("Failed to open video file")
-        raise HTTPException(status_code=400, detail="Failed to open video file")
-    
-    
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = int(cap.get(cv2.CAP_PROP_FPS))
-    out = cv2.VideoWriter("output_video.mp4", cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
-    
-    predictions = []
-    frame_count = 0
-    batch_images = []
-    batch_frames = []
-    batch_size = 8  
-    
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
-        if frame_count % 10 != 0:  # Sample every 10th frame
-            out.write(frame)
-            frame_count += 1
-            continue
-        img = PILImage.create(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        batch_images.append(img)
-        batch_frames.append(frame)
-        frame_count += 1
-        
-        # Process batch when full or at end
-        if len(batch_images) == batch_size or (not ret and batch_images):
-            try:
-                start_batch = time.time()
-                test_dl = yoga_model.dls.test_dl(batch_images)
-                with torch.no_grad():
-                    preds = yoga_model.get_preds(dl=test_dl, reorder=False)
-                    probs = torch.softmax(preds[0], dim=1)
-                    pred_indices = preds[0].argmax(dim=1)
-                for i, (img, frame) in enumerate(zip(batch_images, batch_frames)):
-                    pred_idx = pred_indices[i].item()
-                    confidence = probs[i][pred_idx].item()
-                    pred = yoga_model.dls.vocab[pred_idx]
-                    pred_str = f"{pred} ({confidence:.2f})"
-                    cv2.putText(frame, pred_str, (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA)
-                    out.write(frame)
-                    predictions.append({
-                        "frame": frame_count - len(batch_images) + i,
-                        "pose": pred,
-                        "confidence": confidence
-                    })
-                logger.info(f"Batch prediction time: {time.time() - start_batch:.2f}s for {len(batch_images)} frames")
-            except Exception as e:
-                logger.error(f"Batch prediction failed at frame {frame_count}: {e}")
-            batch_images = []
-            batch_frames = []
-    
-    cap.release()
-    out.release()
-    
-    
-    try:
-        with open("video_predictions.json", "w") as f:
-            json.dump(predictions, f, indent=2)
-        logger.info(f"Saved {len(predictions)} predictions to video_predictions.json")
-    except Exception as e:
-        logger.error(f"Failed to save predictions: {e}")
-    
-    logger.info(f"Video processing time: {time.time() - start_time:.2f}s for {len(predictions)} predictions")
-    
-    
-    if not predictions:
-        raise HTTPException(status_code=404, detail="No poses detected in the video")
-    
-    
-    pose_counts = Counter(pred["pose"] for pred in predictions)
-    most_common_pose, _ = pose_counts.most_common(1)[0]
-    
-    
-    confidences = [pred["confidence"] for pred in predictions if pred["pose"] == most_common_pose]
-    avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
-    
-    
-    return JSONResponse(content={
-        "pose": most_common_pose,
-        "confidence": avg_confidence,
-        "description": pose_library.get(most_common_pose, {}).get("description", "Unknown pose")
-    })
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
-
-
